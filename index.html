@@ -46,13 +46,19 @@ input{font:inherit;padding:11px;border:1px solid var(--line);border-radius:12px;
 .login{max-width:340px;margin:60px auto 0;text-align:center;padding:22px}
 .login .logo{font-size:44px}.login h2{margin:6px 0 2px}
 .err{color:var(--bad);font-size:13px;min-height:20px;margin:6px 0}
+.av{display:inline-flex;align-items:center;justify-content:center;border-radius:50%;object-fit:cover;background:var(--chip);color:var(--mute);font-weight:700;flex:none}
+.prof{text-align:center}.prof .av{margin:6px auto 10px;display:flex}
+.alt{display:inline-block;background:var(--chip);color:var(--ink);padding:9px 14px;border-radius:12px;font-size:14px;width:auto}
+.prof input{text-align:center}.prof code{font-size:11px;user-select:all;word-break:break-all}
+.adm{display:flex;align-items:center;gap:10px;padding:8px 2px;border-bottom:1px solid var(--line);text-align:left}
+.adm:last-child{border:0}.adm .n{flex:1}.sm{padding:6px 10px;border:1px solid var(--line);background:var(--card);color:var(--bad);border-radius:10px;font-size:13px}
 </style>
 </head>
 <body>
 <main>
 <div class="bar"><h1>🏀 NBA Tipping</h1><div class="who" id="who"></div></div>
 <div id="top"></div>
-<div class="tabs" id="tabs"><button id="t1" class="on">Games</button><button id="t2">Leaderboard</button></div>
+<div class="tabs" id="tabs"><button id="t1" class="on">Games</button><button id="t2">Leaderboard</button><button id="t3">Profile</button></div>
 <div id="app"><div class="note">Loading…</div></div>
 </main>
 <script>
@@ -66,7 +72,7 @@ var SEASON_START=Date.UTC(2026,9,19);
 var AUTH=!!API_KEY,S=null,tok="",uid="",mode="in",lerr="",started=false;
 try{S=JSON.parse(localStorage.getItem("nba_sess")||"null")}catch(e){}
 var me=AUTH?"":(localStorage.getItem("nba_name")||"");
-var games=[],picks={},names={},tab=1,err="",dcache={},map={};
+var games=[],picks={},names={},pics={},banned={},isAdmin=false,adminChecked=false,perr="",tab=1,err="",dcache={},map={};
 var day=startOfDay(Date.now());
 var app=document.getElementById("app"),top_=document.getElementById("top");
 
@@ -78,6 +84,11 @@ function winner(g){return g.fin?(g.hs>g.as?"home":"away"):null}
 function fmtT(t){return new Date(t).toLocaleTimeString("en-AU",{hour:"numeric",minute:"2-digit"})}
 function lum(h){var n=parseInt(h,16);return((n>>16&255)*299+(n>>8&255)*587+(n&255)*114)/1000}
 function tc(c,alt){var o=[c,alt].filter(function(x){return /^[0-9a-fA-F]{6}$/.test(x||"")&&lum(x)>=45&&lum(x)<=225})[0];return"#"+(o||"8a8a93")}
+
+function K(){return AUTH?uid:me}
+function dn(k){return AUTH?(names[k]||"Someone"):k}
+function av(k,s){var p=pics[k],n=dn(k),st="width:"+s+"px;height:"+s+"px;font-size:"+Math.round(s*.45)+"px";
+  return p?'<img class="av" style="'+st+'" src="'+esc(p)+'" alt="">':'<span class="av" style="'+st+'">'+esc((n||"?").charAt(0).toUpperCase())+'</span>'}
 
 /* ---------- auth ---------- */
 async function post(url,body,form){
@@ -117,8 +128,8 @@ async function doLogin(){
 
 /* ---------- data ---------- */
 function q(p){return DB_URL+"/"+p+".json"+(tok?"?auth="+tok:"")}
-async function put(path,val){
-  var o={method:"PUT",body:JSON.stringify(val)},r=await fetch(q(path),o);
+async function put(path,val,del){
+  var o=del?{method:"DELETE"}:{method:"PUT",body:JSON.stringify(val)},r=await fetch(q(path),o);
   if(r.status===401&&AUTH&&await refresh())r=await fetch(q(path),o);
   if(!r.ok)throw 0;
 }
@@ -145,17 +156,19 @@ async function ensure(from,to){
 async function loadSched(){if(tab===2)await ensure(SEASON_START,Date.now()+2*864e5);else await ensure(day,day+864e5)}
 async function loadPicks(){
   try{
-    var raw=(await(await fetch(q("picks"))).json())||{};
-    if(raw.error)throw 0;
+    var u=["picks"].concat(AUTH?["names","pics","banned"]:[]);
+    var rs=await Promise.all(u.map(function(p){return fetch(q(p)).then(function(r){return r.json()})}));
+    var bad=rs.filter(function(r){return r&&r.error})[0];if(bad)throw bad.error;
+    picks=rs[0]||{};
     if(AUTH){
-      names=(await(await fetch(q("names"))).json())||{};picks={};
-      Object.keys(raw).forEach(function(k){picks[names[k]||"Someone"]=raw[k]});
-      if(uid&&names[uid])me=names[uid];
-    }else picks=raw;
-  }catch(e){}
+      names=rs[1]||{};pics=rs[2]||{};banned=rs[3]||{};if(uid&&names[uid])me=names[uid];
+      if(!adminChecked){isAdmin=(await(await fetch(q("admins/"+uid))).json())===true;adminChecked=true}
+      if(/removed/.test(err))err="";
+    }
+  }catch(e){if(AUTH&&/ermission/.test(String(e)))err="Your access was removed, or your session expired. Try logging out and in."}
 }
 async function savePick(gid,side){
-  if(!picks[me])picks[me]={};picks[me][gid]=side;render();
+  var k=K();if(!picks[k])picks[k]={};picks[k][gid]=side;render();
   try{await put("picks/"+(AUTH?uid:encodeURIComponent(me))+"/"+gid,side)}
   catch(e){err="Couldn’t save that tip — check your connection.";render()}
 }
@@ -169,14 +182,14 @@ function sideBtn(g,s,w,m,lk){
     (g.fin||g.live?'<i>'+sc+'</i>':'')+(m===s?'<span class="tick">✓</span>':'')+'</button>';
 }
 function card(g){
-  var lk=locked(g),w=winner(g),m=(picks[me]||{})[g.id];
+  var lk=locked(g),w=winner(g),m=(picks[K()]||{})[g.id];
   var who=Object.keys(picks).filter(function(u){return picks[u][g.id]});
   var st=g.fin?"Final":g.live?'<span class="live">● LIVE</span>':(lk?"Locked":who.length+" tipped");
   var h='<div class="card"><div class="meta"><span>'+fmtT(g.tip)+'</span><span>'+st+'</span></div>';
   h+='<div class="row">'+sideBtn(g,"away",w,m,lk)+'<div class="at">@</div>'+sideBtn(g,"home",w,m,lk)+'</div>';
   if(lk&&who.length)h+='<div class="chips">'+who.map(function(u){
     var p=picks[u][g.id],c="chip"+(w?(p===w?" r":" w"):"");
-    return '<span class="'+c+'">'+esc(u)+": "+(p==="away"?g.a:g.h)+'</span>'}).join("")+'</div>';
+    return '<span class="'+c+'">'+esc(dn(u))+": "+(p==="away"?g.a:g.h)+'</span>'}).join("")+'</div>';
   return h+'</div>';
 }
 function renderGames(){
@@ -195,7 +208,21 @@ function renderBoard(){
   if(!rows.length)return '<div class="note">No tips yet.</div>';
   var medal=["🥇","🥈","🥉"];
   return '<div class="card">'+rows.map(function(r,i){
-    return '<div class="lb'+(r.u===me?" me":"")+'"><span class="rk">'+(medal[i]||i+1)+'</span><span class="n">'+esc(r.u)+'</span><span style="color:var(--mute);font-size:12px">'+r.c+'/'+r.t+'</span><b>'+r.c+'</b></div>'}).join("")+'</div>';
+    return '<div class="lb'+(r.u===K()?" me":"")+'"><span class="rk">'+(medal[i]||i+1)+'</span>'+av(r.u,30)+'<span class="n">'+esc(dn(r.u))+'</span><span style="color:var(--mute);font-size:12px">'+r.c+'/'+r.t+'</span><b>'+r.c+'</b></div>'}).join("")+'</div>';
+}
+function renderProfile(){
+  var h='<div class="card prof">'+av(uid,76)+'<label class="alt" for="pf">Change photo</label><input id="pf" type="file" accept="image/*" hidden>'+
+    '<div class="meta" style="margin-top:16px;justify-content:center"><span>Display name</span></div><input id="sname" maxlength="24" value="'+esc(me)+'">'+
+    '<button class="btn" id="sv">Save name</button><div class="err">'+esc(perr)+'</div>'+
+    '<div class="meta" style="justify-content:center"><span>Your ID: <code>'+esc(uid)+'</code></span></div></div>';
+  if(isAdmin){
+    var ids={};[names,picks,banned].forEach(function(o){Object.keys(o).forEach(function(k){ids[k]=1})});delete ids[uid];
+    h+='<div class="card"><div class="meta"><span>Admin · players</span></div>'+(Object.keys(ids).map(function(k){
+      var bn=banned[k];
+      return '<div class="adm">'+av(k,30)+'<span class="n">'+esc(bn?(typeof bn==="string"?bn:"Removed user"):dn(k))+(bn?' <small style="color:var(--mute)">(removed)</small>':'')+'</span>'+
+        (bn?'<button class="sm" style="color:var(--ink)" data-rs="'+esc(k)+'">Restore</button>':'<button class="sm" data-rm="'+esc(k)+'">Remove</button>')+'</div>'}).join("")||'<div class="note">No other players yet.</div>')+'</div>';
+  }
+  return h;
 }
 function loginView(){
   var up=mode==="up";
@@ -209,7 +236,9 @@ function render(){
   var lu=document.getElementById("lu"),keepU=lu?lu.value:"";
   var login=AUTH&&!tok;
   document.getElementById("tabs").style.display=login?"none":"flex";
-  document.getElementById("who").innerHTML=(AUTH&&tok)?esc(me)+' <button class="link" id="out">Log out</button>':"";
+  document.getElementById("who").innerHTML=(AUTH&&tok)?av(uid,24)+' '+esc(me)+(isAdmin?' <small>(admin)</small>':'')+' <button class="link" id="out">Log out</button>':"";
+  document.getElementById("t3").style.display=AUTH?"":"none";
+  document.getElementById("t3").className=tab===3?"on":"";
   document.getElementById("t1").className=tab===1?"on":"";
   document.getElementById("t2").className=tab===2?"on":"";
   if(login){top_.innerHTML="";app.innerHTML=loginView();var l2=document.getElementById("lu");if(l2)l2.value=keepU;return}
@@ -217,7 +246,7 @@ function render(){
   if(!AUTH&&!me)h+='<div class="card"><div class="meta"><span>Pick a name (mates see this)</span></div><input id="nm" maxlength="24" placeholder="Your name"><button class="btn" id="go">Join</button></div>';
   if(err)h+='<div class="warn">'+esc(err)+'</div>';
   top_.innerHTML=h;
-  app.innerHTML=tab===1?renderGames():renderBoard();
+  app.innerHTML=tab===3&&AUTH?renderProfile():tab===1?renderGames():renderBoard();
 }
 
 document.addEventListener("click",function(e){
@@ -227,20 +256,49 @@ document.addEventListener("click",function(e){
   else if(t.id==="go"){var n=clean(document.getElementById("nm").value);if(n){me=n;localStorage.setItem("nba_name",me);render()}}
   else if(t.id==="lgo")doLogin();
   else if(t.id==="lsw"){mode=mode==="up"?"in":"up";lerr="";render()}
-  else if(t.id==="out"){S=null;tok="";uid="";me="";picks={};localStorage.removeItem("nba_sess");render()}
+  else if(t.id==="t3"){tab=3;perr="";render()}
+  else if(t.id==="sv")saveName();
+  else if(t.dataset.rm)removeUser(t.dataset.rm);
+  else if(t.dataset.rs)restoreUser(t.dataset.rs);
+  else if(t.id==="out"){S=null;tok="";uid="";me="";picks={};names={};pics={};banned={};isAdmin=false;adminChecked=false;tab=1;localStorage.removeItem("nba_sess");render()}
   else if(t.dataset.g&&me&&!t.disabled)savePick(t.dataset.g,t.dataset.s);
   else if(t.dataset.nav==="j"){var nx=games.filter(function(g){return g.tip>=day+864e5})[0];if(nx){day=startOfDay(nx.tip);render();loadSched().then(render)}}
   else if(t.dataset.nav!==undefined){var v=+t.dataset.nav;day=v===0?startOfDay(Date.now()):startOfDay(day+v*864e5+(v>0?36e5:-36e5));render();loadSched().then(render)}
 });
 document.addEventListener("keydown",function(e){if(e.key==="Enter"&&e.target.id==="lp")doLogin()});
 
+async function saveName(){
+  var n=document.getElementById("sname").value.trim();
+  if(n.length<2||n.length>24){perr="Name needs 2–24 characters.";return render()}
+  if(Object.keys(names).some(function(k){return k!==uid&&String(names[k]).toLowerCase()===n.toLowerCase()})){perr="That name is taken.";return render()}
+  try{await put("names/"+uid,n);names[uid]=n;me=n;perr="Saved ✓"}catch(e){perr="Couldn’t save the name."}
+  render();
+}
+function shrink(f){return new Promise(function(ok,no){var r=new FileReader();r.onerror=no;r.onload=function(){var im=new Image();im.onerror=no;
+  im.onload=function(){var c=document.createElement("canvas");c.width=c.height=96;var x=c.getContext("2d"),m=Math.min(im.width,im.height);
+    x.drawImage(im,(im.width-m)/2,(im.height-m)/2,m,m,0,0,96,96);ok(c.toDataURL("image/jpeg",.8))};im.src=r.result};r.readAsDataURL(f)})}
+document.addEventListener("change",async function(e){
+  if(e.target.id!=="pf"||!e.target.files[0])return;
+  try{var d=await shrink(e.target.files[0]);await put("pics/"+uid,d);pics[uid]=d;perr="Photo updated ✓"}catch(x){perr="Couldn’t upload that photo."}
+  render();
+});
+async function removeUser(k){
+  if(!confirm("Remove "+dn(k)+"? Their tips are deleted and they can’t tip again."))return;
+  try{
+    await put("banned/"+k,dn(k));banned[k]=dn(k);
+    await put("picks/"+k,null,1);await put("names/"+k,null,1);await put("pics/"+k,null,1);
+    delete picks[k];delete names[k];delete pics[k];perr="";
+  }catch(e){perr="Couldn’t remove — check the new rules are published and you’re set as admin."}
+  render();
+}
+async function restoreUser(k){try{await put("banned/"+k,null,1);delete banned[k]}catch(e){perr="Couldn’t restore."}render()}
 async function start(){
   await Promise.all([loadSched(),loadPicks()]);
   if(!games.some(function(g){return g.tip>=day&&g.tip<day+864e5})){var n0=games.filter(function(g){return g.tip>=day})[0];if(n0){day=startOfDay(n0.tip);await loadSched()}}
   render();
   if(started)return;started=true;
-  setInterval(async function(){if(AUTH&&!tok)return;await loadPicks();render()},30000);
-  setInterval(async function(){if(AUTH&&!tok)return;await loadSched();render()},60000);
+  setInterval(async function(){if(AUTH&&!tok)return;await loadPicks();if(tab!==3)render()},30000);
+  setInterval(async function(){if(AUTH&&!tok)return;await loadSched();if(tab!==3)render()},60000);
   if(AUTH)setInterval(refresh,45*60000);
 }
 (async function(){
