@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NBA Tipping</title>
+<style>
+:root{--bg:#f6f5f1;--card:#fff;--ink:#1c1c1e;--mute:#6b6b70;--line:#e3e1db;--acc:#e8590c;--ok:#2b8a3e;--bad:#c92a2a;--chip:#efede7}
+@media (prefers-color-scheme:dark){:root{--bg:#141416;--card:#1f1f23;--ink:#f1f1f3;--mute:#9a9aa2;--line:#33333a;--acc:#ff8a4c;--ok:#69db7c;--bad:#ff8787;--chip:#2a2a30}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.4 -apple-system,system-ui,"Segoe UI",Roboto,sans-serif}
+main{max-width:640px;margin:0 auto;padding:16px 14px 40px}
+h1{font-size:22px;margin:4px 0 12px}
+.tabs,.nav{display:flex;gap:6px;margin-bottom:12px}
+.tabs button,.nav button{flex:1;padding:9px;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:10px;font-size:14px}
+.tabs button.on{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600}
+.nav .d{flex:3;display:flex;align-items:center;justify-content:center;font-weight:600}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px}
+.meta{font-size:12px;color:var(--mute);margin-bottom:8px;display:flex;justify-content:space-between;gap:8px}
+.row{display:flex;gap:8px}
+.pick{flex:1;padding:11px 6px;border:1.5px solid var(--line);background:var(--card);color:var(--ink);border-radius:10px;font-size:15px;font-weight:600}
+.pick.sel{border-color:var(--acc);background:var(--chip)}
+.pick.win{border-color:var(--ok)}
+.pick:disabled{opacity:.75}
+.pick small{display:block;font-weight:400;color:var(--mute);font-size:11px}
+.chips{margin-top:8px;display:flex;flex-wrap:wrap;gap:5px;font-size:12px}
+.chip{background:var(--chip);border-radius:20px;padding:2px 9px}
+.chip.r{color:var(--ok)}.chip.w{color:var(--bad)}
+.lb{display:flex;align-items:center;gap:10px;padding:10px 4px;border-bottom:1px solid var(--line)}
+.lb:last-child{border:0}.lb .n{flex:1}.lb b{font-size:18px}.rk{width:22px;color:var(--mute)}
+input{font:inherit;padding:9px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);width:100%}
+.btn{padding:9px 14px;border:0;border-radius:10px;background:var(--acc);color:#fff;font-weight:600}
+.note{color:var(--mute);font-size:13px;text-align:center;padding:20px 8px}
+.warn{background:var(--chip);border-radius:10px;padding:10px;font-size:13px;margin-bottom:10px}
+</style>
+</head>
+<body>
+<main>
+<h1>🏀 NBA Tipping</h1>
+<div id="top"></div>
+<div class="tabs"><button id="t1" class="on">Games</button><button id="t2">Leaderboard</button></div>
+<div id="app"><div class="note">Loading schedule…</div></div>
+</main>
+<script>
+/* ===== SETUP: paste your Firebase Realtime Database URL here (no trailing slash).
+   Leave empty to test solo (picks saved only in this browser). ===== */
+var DB_URL = "";
+/* ===================================================================== */
+
+var SCHED = "https://cdn.nba.com/static/json/staticData/scheduleLeagueV2.json";
+var games = [], picks = {}, me = localStorage.getItem("nba_name") || "", tab = 1, err = "";
+var day = startOfDay(Date.now());
+var app = document.getElementById("app"), top_ = document.getElementById("top");
+
+function startOfDay(t){var d=new Date(t);d.setHours(0,0,0,0);return d.getTime()}
+function esc(s){return String(s).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
+function clean(n){return n.replace(/[.$#\[\]\/]/g,"_").trim().slice(0,24)}
+function locked(g){return Date.now()>=g.tip}
+function winner(g){return g.fin?(g.hs>g.as?"home":"away"):null}
+function fmtT(t){return new Date(t).toLocaleTimeString("en-AU",{hour:"numeric",minute:"2-digit"})}
+
+async function loadSched(){
+  var list=null;
+  try{
+    var r=await fetch(SCHED);var j=await r.json();list=[];
+    j.leagueSchedule.gameDates.forEach(function(d){d.games.forEach(function(g){
+      if(!/^00[26]/.test(g.gameId)||!g.homeTeam.teamTricode||!g.awayTeam.teamTricode)return;
+      list.push({id:g.gameId,tip:Date.parse(g.gameDateTimeUTC),
+        a:g.awayTeam.teamTricode,an:g.awayTeam.teamName,h:g.homeTeam.teamTricode,hn:g.homeTeam.teamName,
+        fin:g.gameStatus===3,as:g.awayTeam.score||0,hs:g.homeTeam.score||0});
+    })});
+    try{localStorage.setItem("nba_sched",JSON.stringify(list))}catch(e){}
+  }catch(e){
+    try{list=JSON.parse(localStorage.getItem("nba_sched")||"null")}catch(x){}
+    if(!list)err="Couldn’t load the NBA schedule feed (it may be blocking this browser). Try again later.";
+  }
+  if(list){games=list.sort(function(a,b){return a.tip-b.tip});err=""}
+}
+
+async function loadPicks(){
+  try{
+    if(DB_URL){var r=await fetch(DB_URL+"/picks.json");picks=(await r.json())||{}}
+    else picks=JSON.parse(localStorage.getItem("nba_picks")||"{}");
+  }catch(e){}
+}
+async function savePick(gid,side){
+  if(!picks[me])picks[me]={};picks[me][gid]=side;render();
+  try{
+    if(DB_URL)await fetch(DB_URL+"/picks/"+encodeURIComponent(me)+"/"+gid+".json",{method:"PUT",body:JSON.stringify(side)});
+    else localStorage.setItem("nba_picks",JSON.stringify(picks));
+  }catch(e){err="Couldn’t save that tip — check your connection."; render()}
+}
+
+function card(g){
+  var lk=locked(g),w=winner(g),m=(picks[me]||{})[g.id];
+  var who=Object.keys(picks).filter(function(u){return picks[u][g.id]});
+  function btn(side,t,n){
+    var c="pick"+(m===side?" sel":"")+(w===side?" win":"");
+    return '<button class="'+c+'" data-g="'+g.id+'" data-s="'+side+'"'+((lk||!me)?" disabled":"")+'>'+esc(t)+(w===side?" ✓":"")+'<small>'+esc(n)+(g.fin?" · "+(side==="away"?g.as:g.hs):"")+'</small></button>';
+  }
+  var h='<div class="card"><div class="meta"><span>'+fmtT(g.tip)+(lk&&!g.fin?" · locked":"")+'</span><span>'+(g.fin?"Final":who.length+" tipped")+'</span></div>';
+  h+='<div class="row">'+btn("away",g.a,g.an)+btn("home","@ "+g.h,g.hn)+'</div>';
+  if(lk&&who.length)h+='<div class="chips">'+who.map(function(u){
+    var p=picks[u][g.id],c="chip"+(w?(p===w?" r":" w"):"");
+    return '<span class="'+c+'">'+esc(u)+": "+(p==="away"?g.a:g.h)+'</span>';}).join("")+'</div>';
+  return h+'</div>';
+}
+
+function renderGames(){
+  var end=day+864e5,list=games.filter(function(g){return g.tip>=day&&g.tip<end});
+  var nav='<div class="nav"><button data-nav="-1">‹</button><div class="d card" style="margin:0;padding:8px">'+
+    new Date(day).toLocaleDateString("en-AU",{weekday:"short",day:"numeric",month:"short"})+
+    '</div><button data-nav="0">Today</button><button data-nav="1">›</button></div>';
+  if(!list.length)return nav+'<div class="note">'+(games.length?"No games this day (try ‹ ›).":"")+'</div>';
+  return nav+list.map(card).join("");
+}
+
+function renderBoard(){
+  var rows=Object.keys(picks).map(function(u){
+    var c=0,t=0;games.forEach(function(g){var p=picks[u][g.id];if(g.fin&&p){t++;if(p===winner(g))c++}});
+    return{u:u,c:c,t:t};
+  }).sort(function(a,b){return b.c-a.c||a.t-b.t});
+  if(!rows.length)return '<div class="note">No tips yet.</div>';
+  return '<div class="card">'+rows.map(function(r,i){
+    return '<div class="lb"><span class="rk">'+(i+1)+'</span><span class="n">'+esc(r.u)+'</span><span style="color:var(--mute);font-size:12px">'+r.c+'/'+r.t+'</span><b>'+r.c+'</b></div>';}).join("")+'</div>';
+}
+
+function render(){
+  document.getElementById("t1").className=tab===1?"on":"";
+  document.getElementById("t2").className=tab===2?"on":"";
+  var h="";
+  if(!me)h+='<div class="card"><div class="meta"><span>Pick a name (mates see this)</span></div><div class="row"><input id="nm" maxlength="24" placeholder="Your name"><button class="btn" id="go">Join</button></div></div>';
+  if(!DB_URL)h+='<div class="warn">Solo test mode: tips are saved only in this browser. Set DB_URL in the file to share with mates.</div>';
+  if(err)h+='<div class="warn">'+esc(err)+'</div>';
+  top_.innerHTML=h;
+  app.innerHTML=tab===1?renderGames():renderBoard();
+}
+
+document.addEventListener("click",function(e){
+  var t=e.target.closest("button");if(!t)return;
+  if(t.id==="t1"){tab=1;render()}
+  else if(t.id==="t2"){tab=2;render()}
+  else if(t.id==="go"){var n=clean(document.getElementById("nm").value);if(n){me=n;localStorage.setItem("nba_name",me);render()}}
+  else if(t.dataset.g&&me&&!t.disabled)savePick(t.dataset.g,t.dataset.s);
+  else if(t.dataset.nav!==undefined){var v=+t.dataset.nav;day=v===0?startOfDay(Date.now()):startOfDay(day+v*864e5+(v>0?36e5:-36e5));render()}
+});
+
+(async function(){
+  await Promise.all([loadSched(),loadPicks()]);render();
+  setInterval(async function(){await loadPicks();render()},30000);
+  setInterval(async function(){await loadSched();render()},600000);
+})();
+</script>
+</body>
+</html>
