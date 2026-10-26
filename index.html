@@ -59,22 +59,32 @@ function locked(g){return Date.now()>=g.tip}
 function winner(g){return g.fin?(g.hs>g.as?"home":"away"):null}
 function fmtT(t){return new Date(t).toLocaleTimeString("en-AU",{hour:"numeric",minute:"2-digit"})}
 
+var cache={},map={},SEASON_START=Date.UTC(2026,9,19);
+function ymd(t){var d=new Date(t);return d.getUTCFullYear()+("0"+(d.getUTCMonth()+1)).slice(-2)+("0"+d.getUTCDate()).slice(-2)}
+async function ensure(from,to){
+  var W=10*864e5,now=Date.now(),jobs=[];
+  for(var s=Math.floor(from/W)*W;s<to;s+=W){(function(s){
+    var key=ymd(s),e=s+W;
+    if(cache[key]&&e<now-2*864e5)return;
+    jobs.push(fetch("https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?limit=300&dates="+ymd(s)+"-"+ymd(e))
+      .then(function(r){return r.json()}).then(function(j){
+        (j.events||[]).forEach(function(ev){
+          var c=ev.competitions[0],H,A;
+          c.competitors.forEach(function(x){if(x.homeAway==="home")H=x;else A=x});
+          map[ev.id]={id:ev.id,tip:Date.parse(ev.date),a:A.team.abbreviation,an:A.team.shortDisplayName,
+            h:H.team.abbreviation,hn:H.team.shortDisplayName,
+            fin:!!(ev.status&&ev.status.type&&ev.status.type.completed),as:+A.score||0,hs:+H.score||0};
+        });
+        cache[key]=1;
+      }));
+  })(s)}
+  try{await Promise.all(jobs);err=""}
+  catch(e){if(!Object.keys(map).length)err="Couldn’t load the schedule feed. Try refreshing in a minute."}
+  games=Object.keys(map).map(function(k){return map[k]}).sort(function(a,b){return a.tip-b.tip});
+}
 async function loadSched(){
-  var list=null;
-  try{
-    var r=await fetch(SCHED);var j=await r.json();list=[];
-    j.leagueSchedule.gameDates.forEach(function(d){d.games.forEach(function(g){
-      if(!/^00[26]/.test(g.gameId)||!g.homeTeam.teamTricode||!g.awayTeam.teamTricode)return;
-      list.push({id:g.gameId,tip:Date.parse(g.gameDateTimeUTC),
-        a:g.awayTeam.teamTricode,an:g.awayTeam.teamName,h:g.homeTeam.teamTricode,hn:g.homeTeam.teamName,
-        fin:g.gameStatus===3,as:g.awayTeam.score||0,hs:g.homeTeam.score||0});
-    })});
-    try{localStorage.setItem("nba_sched",JSON.stringify(list))}catch(e){}
-  }catch(e){
-    try{list=JSON.parse(localStorage.getItem("nba_sched")||"null")}catch(x){}
-    if(!list)err="Couldn’t load the NBA schedule feed (it may be blocking this browser). Try again later.";
-  }
-  if(list){games=list.sort(function(a,b){return a.tip-b.tip});err=""}
+  if(tab===2)await ensure(SEASON_START,Date.now()+2*864e5);
+  else await ensure(day-864e5,day+2*864e5);
 }
 
 async function loadPicks(){
@@ -138,17 +148,17 @@ function render(){
 
 document.addEventListener("click",function(e){
   var t=e.target.closest("button");if(!t)return;
-  if(t.id==="t1"){tab=1;render()}
-  else if(t.id==="t2"){tab=2;render()}
+  if(t.id==="t1"){tab=1;render();loadSched().then(render)}
+  else if(t.id==="t2"){tab=2;render();loadSched().then(render)}
   else if(t.id==="go"){var n=clean(document.getElementById("nm").value);if(n){me=n;localStorage.setItem("nba_name",me);render()}}
   else if(t.dataset.g&&me&&!t.disabled)savePick(t.dataset.g,t.dataset.s);
-  else if(t.dataset.nav!==undefined){var v=+t.dataset.nav;day=v===0?startOfDay(Date.now()):startOfDay(day+v*864e5+(v>0?36e5:-36e5));render()}
+  else if(t.dataset.nav!==undefined){var v=+t.dataset.nav;day=v===0?startOfDay(Date.now()):startOfDay(day+v*864e5+(v>0?36e5:-36e5));render();loadSched().then(render)}
 });
 
 (async function(){
   await Promise.all([loadSched(),loadPicks()]);render();
   setInterval(async function(){await loadPicks();render()},30000);
-  setInterval(async function(){await loadSched();render()},600000);
+  setInterval(async function(){await loadSched();render()},60000);
 })();
 </script>
 </body>
