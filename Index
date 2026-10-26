@@ -44,7 +44,7 @@ input{font:inherit;padding:9px;border:1px solid var(--line);border-radius:10px;b
 <script>
 /* ===== SETUP: paste your Firebase Realtime Database URL here (no trailing slash).
    Leave empty to test solo (picks saved only in this browser). ===== */
-var DB_URL = "";
+var DB_URL = "https://tripping-dd4e6-default-rtdb.firebaseio.com/";
 /* ===================================================================== */
 
 var SCHED = "https://cdn.nba.com/static/json/staticData/scheduleLeagueV2.json";
